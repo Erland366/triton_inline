@@ -1,0 +1,15 @@
+[project]
+name = "triton-inline"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "hatchet>=1.4.0",
+    "llnl-hatchet>=2025.2.0",
+    "lovely-tensors>=0.1.21",
+    "nsight-python>=0.9.5",
+    "torch>=2.10.0",
+    "torchvision>=0.25.0",
+    "transformers>=5.1.0",
+]

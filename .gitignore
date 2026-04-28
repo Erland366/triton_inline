@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# uv
+.python-version
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Triton / GPU profiling artifacts
+*.chrome_trace
+*.hatchet
+*.ncu-rep
+*.nsys-rep
+*.qdrep
+*.sqlite
+
+# Local Claude/Codex agent state (keep project-level configs, drop machine-local)
+.claude/settings.local.json
+.codex/settings.local.json

@@ -1,0 +1,29 @@
+{
+  "name": "cuda-skills",
+  "version": "1.0.0",
+  "description": "CUDA/Triton kernel development. Use when: (1) Writing or optimizing GPU kernels, (2) Debugging memory issues or race conditions, (3) Profiling kernel performance",
+  "author": {
+    "name": ""
+  },
+  "skills": ".codex/skills",
+  "domain": "cuda",
+  "triggers": {
+    "advise": {
+      "patterns": [
+        "<advise>",
+        "kernel optimization",
+        "cuda performance",
+        "triton suggestions"
+      ],
+      "skill": "domain-advisor"
+    },
+    "retrospective": {
+      "patterns": [
+        "<retrospective>",
+        "kernel results",
+        "what optimizations worked"
+      ],
+      "skill": "domain-retrospective"
+    }
+  }
+}
