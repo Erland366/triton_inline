@@ -36,6 +36,10 @@
         "4_debug": "completed — 3 bugs identified (K-loop floor div, stride advance, accumulator overwrite)"
       }
     },
+    "1.1c": {
+      "status": "not_started",
+      "description": "Pointer arithmetic and block pointer practice"
+    },
     "1.2": { "status": "in_progress", "started": "2026-02-14", "current_phase": "implement" },
     "1.3": { "status": "not_started" },
     "2.1": { "status": "not_started" },

@@ -18,12 +18,15 @@ Naive PyTorch softmax reads 5MN+2M elements, writes 3MN+2M. Fused kernel reads M
 
 ## LayerNorm Forward Pattern
 
+- Pointer arithmetic reference: `references/triton-pointer-arithmetic.md`
 - Two-pass (mean, variance) + normalize pass — three reads of X
 - Not 3x slower because after first read, data is in L2 cache (~5 TB/s) not DRAM (~1 TB/s)
   - RTX 4090 has 72MB L2. Typical row = 4096 elements * 2 bytes = 8KB. Tiny vs 72MB.
   - LRU eviction policy keeps recently-read rows resident
 - Accumulate in FP32: `.to(tl.float32)` even for FP16 inputs
 - `other=0.0` for masked loads — zeros don't affect sum (mean/variance)
+- FP16 LayerNorm comparisons need `atol=1e-2`: sparse 1-ULP differences from PyTorch
+  are expected after the FP32 computation is rounded back to FP16.
 
 ## LayerNorm Backward — Parallel Reduction
 
