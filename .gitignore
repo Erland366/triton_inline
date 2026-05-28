@@ -37,3 +37,4 @@ env/
 # Local Claude/Codex agent state (keep project-level configs, drop machine-local)
 .claude/settings.local.json
 .codex/settings.local.json
+compiled_resources/

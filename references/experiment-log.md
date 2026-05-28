@@ -12,6 +12,13 @@ Each entry should include:
 
 ---
 
+## 2026-05-27 — Plan: TLX Exercise 0 Vector Add
+
+- **Type**: Plan
+- **General description**: Prepared the first TLX study exercise around the minimal warp-specialized vector-add tutorial.
+- **Details**: Added a TLX exercise guide plus TODO-only student scripts for correctness and benchmarking. The exercise starts with `tlx.async_tasks` and `tlx.async_task` before moving to Hopper GEMM pipelining, barriers, and TMA.
+- **Artifacts**: `exercises/tlx/README.md`, `exercises/tlx/exercise.py`, `exercises/tlx/benchmark.py`, `benchmark_results/tlx-vector-add-2026-05-27.md`
+
 ## 2026-02-13 — Retrospective: Boundary Masking in Tiled Matmul
 
 - **Type**: Retrospective
