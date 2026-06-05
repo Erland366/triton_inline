@@ -1,5 +1,6 @@
 from pathlib import Path
-from typing import Literal
+import shlex
+from typing import Literal, Optional
 from pprint import pprint
 
 import modal
@@ -8,9 +9,9 @@ CURRENT_DIR = Path(__file__).parent
 REMOTE_DIR = Path("/app")
 DEFAULT_ARTIFACT_GLOBS = ",".join(
     [
-        "plots/vector-add-performance.png",
-        "*.chrome_trace",
-        "*.hatchet",
+        "**/*.png",
+        "**/*.chrome_trace",
+        "**/*.hatchet",
     ]
 )
 
@@ -49,8 +50,28 @@ image = (
 )
 app = modal.App("TLX-learning", image=image)
 
+
+def normalize_script_command(script: str) -> str:
+    """Map local absolute script paths into the remote /app mount."""
+    command_parts = shlex.split(script)
+    if not command_parts:
+        raise ValueError("--script must not be empty")
+
+    script_path = Path(command_parts[0]).expanduser()
+    if script_path.is_absolute():
+        try:
+            script_path = script_path.resolve().relative_to(CURRENT_DIR.resolve())
+        except ValueError as exc:
+            raise ValueError(
+                f"--script path must be inside {CURRENT_DIR} when using an absolute path: {script_path}"
+            ) from exc
+        command_parts[0] = script_path.as_posix()
+
+    return shlex.join(command_parts)
+
 @app.function(gpu="H100")
-def run_script(script: str, artifact_globs: list[str], max_artifact_bytes: int):
+def run_script(script: str, artifact_globs: list[str], max_artifact_bytes: int, 
+               env_vars: dict[str, str], action: Literal["run", "pytest"]):
     """
     Run a Python script on H100 GPU.
     """
@@ -60,11 +81,35 @@ def run_script(script: str, artifact_globs: list[str], max_artifact_bytes: int):
 
     os.chdir(REMOTE_DIR)
 
-    cmd = ["python", *shlex.split(script)]
-    print(f"Running: {' '.join(cmd)}")
+    def iter_artifact_paths():
+        seen_paths = set()
+        for pattern in artifact_globs:
+            for artifact_path in sorted(REMOTE_DIR.glob(pattern)):
+                if not artifact_path.is_file():
+                    continue
+
+                relative_path = artifact_path.relative_to(REMOTE_DIR).as_posix()
+                if relative_path in seen_paths:
+                    continue
+
+                seen_paths.add(relative_path)
+                yield relative_path, artifact_path
+
+    initial_artifacts = {
+        relative_path: (artifact_path.stat().st_mtime_ns, artifact_path.stat().st_size)
+        for relative_path, artifact_path in iter_artifact_paths()
+    }
+
+    env = os.environ.copy()
+    env.update(env_vars)
+    if action == "run":
+        cmd = ["python", *shlex.split(script)]
+    else:
+        cmd = ["python", "-m", "pytest", *shlex.split(script)]
+    print(f"Running: {shlex.join(cmd)}")
     print(f"-"*60)
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     print(result.stdout)
     if result.stderr:
         print(f"STDERR: {result.stderr}")
@@ -76,27 +121,23 @@ def run_script(script: str, artifact_globs: list[str], max_artifact_bytes: int):
         "success": result.returncode == 0,
         "artifacts": {},
         "artifact_errors": [],
+        "artifact_globs": artifact_globs,
     }
 
-    seen_artifacts = set()
-    for pattern in artifact_globs:
-        for artifact_path in sorted(REMOTE_DIR.glob(pattern)):
-            if not artifact_path.is_file():
-                continue
+    for relative_path, artifact_path in iter_artifact_paths():
+        artifact_stat = artifact_path.stat()
+        artifact_state = (artifact_stat.st_mtime_ns, artifact_stat.st_size)
+        if initial_artifacts.get(relative_path) == artifact_state:
+            continue
 
-            relative_path = artifact_path.relative_to(REMOTE_DIR).as_posix()
-            if relative_path in seen_artifacts:
-                continue
-            seen_artifacts.add(relative_path)
+        artifact_size = artifact_stat.st_size
+        if artifact_size > max_artifact_bytes:
+            load["artifact_errors"].append(
+                f"{relative_path} is {artifact_size} bytes, above --max-artifact-bytes={max_artifact_bytes}"
+            )
+            continue
 
-            artifact_size = artifact_path.stat().st_size
-            if artifact_size > max_artifact_bytes:
-                load["artifact_errors"].append(
-                    f"{relative_path} is {artifact_size} bytes, above --max-artifact-bytes={max_artifact_bytes}"
-                )
-                continue
-
-            load["artifacts"][relative_path] = artifact_path.read_bytes()
+        load["artifacts"][relative_path] = artifact_path.read_bytes()
 
     return load
 
@@ -120,7 +161,7 @@ def test_image():
     subprocess.run(["python", "-m", "pip", "show", "triton"], check=False)
     subprocess.run(["nvidia-smi"], check=False)
 
-@app.function(gpu="H100")
+# @app.function(gpu="H100") # Uncomment if you actually want to use it
 def interactive_session():
     """
     Start an interactive session for debugging.
@@ -148,15 +189,31 @@ def interactive_session():
     return {"status": "ready", "cwd": os.getcwd()}
 
 
+def parse_env_vars(env_vars: Optional[str]) -> dict[str, str]:
+    if not env_vars:
+        return {}
 
+    parsed = {}
+    for entry in env_vars.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+
+        key, sep, value = entry.partition("=")
+        if not sep or not key:
+            raise ValueError(f"--env-vars must be KEY=VALUE, got: {entry}")
+        parsed[key] = value
+
+    return parsed
 
 @app.local_entrypoint()
 def main(
-    action: Literal["run", "test_image"],
+    action: Literal["run", "pytest", "test_image"],
     script: str = None,
     artifact_globs: str = DEFAULT_ARTIFACT_GLOBS,
     artifact_dir: str = ".",
     max_artifact_bytes: int = 100_000_000,
+    env_vars: Optional[str] = None,
     verbose: bool = True,
 ):
     if action == "test_image":
@@ -165,18 +222,21 @@ def main(
         print(f"="*60)
 
         test_image.remote()
-    elif action == "run":
+    elif action == "run" or action == "pytest":
         if not script:
-            print(f"Error: --script required for action =run")
-            print(f"Usage: modal run run_modal.py --action run --script examples/my_kernel.py")
+            print(f"Error: --script required for action ={action}")
+            print(f"Usage: modal run run_modal.py --action {action} --script examples/my_kernel.py")
             return
+
+        normalized_script = normalize_script_command(script)
         
         print(f"="*60)
-        print(f"Running {script} on Modal H100")
+        print(f"Running {normalized_script} on Modal H100")
         print(f"="*60)
 
         artifact_patterns = [pattern.strip() for pattern in artifact_globs.split(",") if pattern.strip()]
-        result = run_script.remote(script, artifact_patterns, max_artifact_bytes)
+        env_vars = parse_env_vars(env_vars)
+        result = run_script.remote(normalized_script, artifact_patterns, max_artifact_bytes, env_vars, action)
 
         print("\n" + "="*60)
         if result["success"]:
