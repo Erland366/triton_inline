@@ -80,11 +80,13 @@ Start with only these scopes:
 ```python
 pl.enter_scope("add2_ws_kernel")
 
-with pl.scope("default_task_x_plus_y"):
-    ...
+pl.enter_scope("default_task_x_plus_y")
+...
+pl.exit_scope("default_task_x_plus_y")
 
-with pl.scope("specialized_task_a_plus_b"):
-    ...
+pl.enter_scope("specialized_task_a_plus_b")
+...
+pl.exit_scope("specialized_task_a_plus_b")
 
 pl.exit_scope("add2_ws_kernel")
 ```
@@ -123,8 +125,11 @@ Then:
 
 1. Copy your completed `add2_warp_specialized_kernel` indexing and async-task
    structure into the profiled kernel.
-2. Put the first addition inside `with pl.scope("default_task_x_plus_y")`.
-3. Put the second addition inside `with pl.scope("specialized_task_a_plus_b")`.
+2. Put the first addition between `pl.enter_scope("default_task_x_plus_y")`
+   and `pl.exit_scope("default_task_x_plus_y")`.
+3. Put the second addition between
+   `pl.enter_scope("specialized_task_a_plus_b")` and
+   `pl.exit_scope("specialized_task_a_plus_b")`.
 4. Keep the same launch signature and output order.
 5. Change `PROFILE_KERNEL_READY = True`.
 
@@ -155,9 +160,9 @@ source .venv/bin/activate && modal run run_modal.py --action run --script exerci
 The runner now collects these artifacts by default:
 
 ```text
-plots/vector-add-performance.png
-*.chrome_trace
-*.hatchet
+**/*.png
+**/*.chrome_trace
+**/*.hatchet
 ```
 
 If the profile script writes `tlx-add2.chrome_trace`, the local runner saves it
@@ -174,25 +179,87 @@ Open it in Perfetto.
 Use warp sampling:
 
 ```bash
-source .venv/bin/activate && python exercises/tlx_b/profile_vector_add2.py --warp-ids 0,4,8
+source .venv/bin/activate && python exercises/tlx_b/profile_vector_add2.py --warp-ids 0,4,8,11
 ```
 
 On Modal:
 
 ```bash
-source .venv/bin/activate && modal run run_modal.py --action run --script "exercises/tlx_b/profile_vector_add2.py --warp-ids 0,4,8"
+source .venv/bin/activate && modal run run_modal.py --action run --script "exercises/tlx_b/profile_vector_add2.py --warp-ids 0,4,8,11"
 ```
 
 Interpretation of the warp IDs is empirical at this stage:
 
 - `0` usually samples a trunk/default warp
 - `4` is a useful first probe for a non-default task
-- `8` is useful when the non-default task is replicated
+- use a power-of-two number of sampled IDs, such as `0,4` or `0,4,8,11`
+
+Proton's current instrumentation pass requires the number of selected warp IDs
+to be a power of two. A list like `0,4,8` fails in `ConvertProtonToProtonGPU`
+because it creates three profiling segments.
+
+The profiling script prints the effective warp IDs before launching the kernel.
+Check that stdout line first when the trace does not show the lanes you expect.
 
 If you later use explicit `warp_group_start_id`, update the sampled IDs to match
 the assignments you requested.
 
-### 6. Generate a tree profile instead of a timeline
+### 6. Why Not `--granularity warp_group`
+
+The Proton Python mode exposes `warp_group`, but this TLX/NVIDIA lowering path
+currently fails later with:
+
+```text
+granularity must be warp for now
+```
+
+So this module intentionally uses:
+
+```text
+--granularity warp
+```
+
+and samples representative warp IDs instead. For this toy kernel, use:
+
+```text
+--warp-ids 0,4,8,11
+```
+
+That gives you the default task on warp 0 and sampled specialized-task warps
+from the replicated async task.
+
+You may also see this lower-level error while experimenting:
+
+```text
+buffer-size per segment(12) must be power of 2
+```
+
+This TLX toy kernel has 12 total warps: 4 default/trunk warps plus two
+specialized replicas of 4 warps each. With all-warps profiling, Proton splits a
+nonzero buffer size across 12 profiling segments and requires each segment to be
+a power of two. For example, this is invalid:
+
+```text
+--granularity warp_group --all-warps --buffer-size 4096
+```
+
+because `4096 / 12` is not a power of two. Prefer the script default:
+
+```text
+--buffer-size 0
+```
+
+which lets Proton choose its default global buffer size. If you need an explicit
+size, use `12 * power_of_two`, for example:
+
+```text
+--buffer-size 49152
+```
+
+This buffer-size fix does not make `warp_group` work on the current NVIDIA
+lowering path; it only avoids the earlier buffer-size error.
+
+### 7. Generate a tree profile instead of a timeline
 
 Timeline mode is the default. To get operation measurements:
 
@@ -220,16 +287,19 @@ recording the regions you meant to record.
 `run_modal.py` now has a generic artifact collector. The default is:
 
 ```text
-plots/vector-add-performance.png,*.chrome_trace,*.hatchet
+**/*.png,**/*.chrome_trace,**/*.hatchet
 ```
 
-For a custom output directory, pass a comma-separated glob list:
+Only artifacts created or changed during the remote run are returned. That keeps
+stale files uploaded from the local project from being copied back by accident.
+
+For a custom output pattern, pass a comma-separated glob list:
 
 ```bash
 source .venv/bin/activate && modal run run_modal.py \
   --action run \
   --script exercises/tlx_b/profile_vector_add2.py \
-  --artifact-globs "*.chrome_trace,*.hatchet,profiles/*.chrome_trace"
+  --artifact-globs "**/*.chrome_trace,**/*.hatchet,profiles/*.chrome_trace"
 ```
 
 Artifacts are saved locally with the same relative path used on the remote
