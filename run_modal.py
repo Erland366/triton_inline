@@ -141,7 +141,7 @@ def run_script(script: str, artifact_globs: list[str], max_artifact_bytes: int,
 
     return load
 
-@app.function(gpu="H100")
+# @app.function(gpu="H100") # Uncomment if you actually want to use it
 def test_image():
     import os
     import subprocess

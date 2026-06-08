@@ -71,6 +71,25 @@ def matmul_kernel_pipelined_hopper(
         b_ptrs += BLOCK_SIZE_K * stride_bk
         tlx.async_load_commit_group([token_a, token_b])
 
+    # main K loop
+    acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    # Disable auto-pipelining with num_stages=0
+    for k in tl.range(0, tl.cdiv(K, BLOCK_SIZE_K), num_stages=0):
+        # Select the buffer for the current iteration
+        buf = k % NUM_STAGES
+        a_k = tlx.local_view(buffers_A, buf)
+        b_k = tlx.local_view(buffers_B, buf)
+
+        # wait for buffers to be ready.
+        tlx.async_load_wait_group(NUM_STAGES - 2)
+
+        # Run MMA
+        acc = tlx.async_dot(a_k, b_k, acc)
+
+        # Prefetch the iteration NUM_STAGES - 1 blocks ahead
+        i = k + NUM_STAGES - 1
+        a_next = tlx.local_view(buffers_A, i % NUM_STAGES)
+
 
 def blocked_matmul_pseudo(A, B, BLOCK_SIZE_M, BLOCK_SIZE_N, GROUP_SIZE_M):
     M, K = A.shape

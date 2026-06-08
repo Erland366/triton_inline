@@ -18,6 +18,18 @@ def memcpy_1d_kernel(in_ptr, out_ptr, xnumel, XBLOCK: gl.constexpr, layout: gl.c
     out_ptrs = out_ptr + offsets
     gl.store(out_ptrs, value, mask=mask)
 
+
+
+def get_throughput(inp: torch.Tensor, ms: int | float) -> float:
+    tbytes = (2 * inp.numel() * inp.element_size() >> 30) / 1024
+    return (tbytes / (ms * 1e-3))
+
+def bench_memcpy_impl(inp, out, impl):
+    compiled_kernel = impl(inp, out)
+    fn = lambda: impl(inp, out)
+    ms = triton.testing.do_bench(fn)
+    return compiled_kernel, get_throughput(inp, ms)
+
 def memcpy_1d_impl(inp, out, XBLOCK, layout, num_warps):
     xnumel = inp.numel()
     grid = (triton.cdiv(xnumel, XBLOCK), )
