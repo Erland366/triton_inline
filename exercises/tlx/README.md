@@ -82,16 +82,17 @@ without involving warp-specialized producers yet.
 
 ## Exercise 2: Warp-Specialized Hopper Kernels
 
-**Status:** roadmap only. Do not start until Exercise 1 is completed and
-documented.
+**Status:** prepared as a worksheet module.
 
-After Exercise 1, move to either:
+Start from:
 
-- `compiled_resources/TLX/triton/third_party/tlx/tutorials/hopper_gemm_ws.py`
-- `compiled_resources/TLX/triton/third_party/tlx/tutorials/hopper_fa_ws.py`
+- `exercises/tlx_hopper_ws/README.md`
+- `exercises/tlx_hopper_ws/exercise.py`
 
-Do not start here. These kernels mix async tasks, TMA descriptors, mbarriers,
-replicated MMA consumers, and phase tracking.
+This module studies `compiled_resources/TLX/triton/third_party/tlx/tutorials/hopper_gemm_ws.py`
+as a producer/consumer state machine before any full rewrite. Keep the first
+pass fixed to `NUM_CTAS=1`, `USE_WARP_BARRIER=False`, and
+`EPILOGUE_SUBTILE=False`; the advanced variants are follow-up exercises.
 
 ## Reporting
 

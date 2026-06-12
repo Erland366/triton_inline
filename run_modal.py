@@ -14,6 +14,7 @@ DEFAULT_ARTIFACT_GLOBS = ",".join(
         "**/*.hatchet",
     ]
 )
+MACHINE_ARCH = "B200"
 
 IGNORE_PATTERNS = [
     ".venv",
@@ -69,11 +70,11 @@ def normalize_script_command(script: str) -> str:
 
     return shlex.join(command_parts)
 
-@app.function(gpu="H100")
+@app.function(gpu=MACHINE_ARCH)
 def run_script(script: str, artifact_globs: list[str], max_artifact_bytes: int, 
                env_vars: dict[str, str], action: Literal["run", "pytest"]):
-    """
-    Run a Python script on H100 GPU.
+    f"""
+    Run a Python script on {MACHINE_ARCH} GPU.
     """
     import subprocess
     import os
@@ -140,6 +141,39 @@ def run_script(script: str, artifact_globs: list[str], max_artifact_bytes: int,
         load["artifacts"][relative_path] = artifact_path.read_bytes()
 
     return load
+
+
+@app.function(gpu=MACHINE_ARCH)
+def debug_script(script: str, env_vars: dict[str, str]):
+    f"""
+    Run a Python script in-process on {MACHINE_ARCH} GPU for breakpoint debugging.
+    """
+    import os
+    import runpy
+    import shlex
+    import sys
+
+    os.chdir(REMOTE_DIR)
+    os.environ.update(env_vars)
+
+    command_parts = shlex.split(script)
+    if not command_parts:
+        raise ValueError("--script must not be empty")
+
+    script_path = Path(command_parts[0])
+    script_args = command_parts[1:]
+    remote_script_path = script_path if script_path.is_absolute() else REMOTE_DIR / script_path
+    script_dir = str(remote_script_path.parent)
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+
+    print(f"Debugging in-process: python {shlex.join(command_parts)}")
+    print("Use `modal run -i ... --action debug ...`; breakpoint() will attach to this terminal.")
+    modal.interact()
+
+    sys.argv = [str(script_path), *script_args]
+    runpy.run_path(str(remote_script_path), run_name="__main__")
+
 
 # @app.function(gpu="H100") # Uncomment if you actually want to use it
 def test_image():
@@ -208,7 +242,7 @@ def parse_env_vars(env_vars: Optional[str]) -> dict[str, str]:
 
 @app.local_entrypoint()
 def main(
-    action: Literal["run", "pytest", "test_image"],
+    action: Literal["run", "pytest", "debug", "test_image"],
     script: str = None,
     artifact_globs: str = DEFAULT_ARTIFACT_GLOBS,
     artifact_dir: str = ".",
@@ -231,7 +265,7 @@ def main(
         normalized_script = normalize_script_command(script)
         
         print(f"="*60)
-        print(f"Running {normalized_script} on Modal H100")
+        print(f"Running {normalized_script} on Modal {MACHINE_ARCH}")
         print(f"="*60)
 
         artifact_patterns = [pattern.strip() for pattern in artifact_globs.split(",") if pattern.strip()]
@@ -261,3 +295,16 @@ def main(
                 print(f"Saved artifact to {local_path}")
         elif result["success"]:
             print("No matching artifacts were returned.")
+    elif action == "debug":
+        if not script:
+            print("Error: --script required for action =debug")
+            print("Usage: modal run -i run_modal.py --action debug --script examples/my_kernel.py")
+            return
+
+        normalized_script = normalize_script_command(script)
+        env_vars = parse_env_vars(env_vars)
+
+        print(f"="*60)
+        print(f"Debugging {normalized_script} on Modal {MACHINE_ARCH}")
+        print(f"="*60)
+        debug_script.remote(normalized_script, env_vars)

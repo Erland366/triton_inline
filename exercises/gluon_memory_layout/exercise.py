@@ -1,3 +1,5 @@
+
+# type: ignore
 """
 Exercise: Gluon Memory Layouts
 Module: Gluon - explicit tensor layout control
@@ -17,7 +19,6 @@ Run on Modal H100:
       --action pytest \
       --script "exercises/gluon_memory_layout/exercise.py -q"
 """
-
 from __future__ import annotations
 
 from dataclasses import dataclass
