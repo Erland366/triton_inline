@@ -14,7 +14,7 @@ DEFAULT_ARTIFACT_GLOBS = ",".join(
         "**/*.hatchet",
     ]
 )
-MACHINE_ARCH = "B200"
+MACHINE_ARCH = "H100:1"
 
 IGNORE_PATTERNS = [
     ".venv",
@@ -42,7 +42,7 @@ image = (
         "cd /opt/triton && /.uv/uv pip install --python $(command -v python) --compile-bytecode -r python/requirements.txt",
         "cd /opt/triton && /.uv/uv pip install --python $(command -v python) --compile-bytecode -e . ",
     )
-    .uv_pip_install("matplotlib", "pandas")
+    .uv_pip_install("matplotlib", "pandas", "expecttest")
     .add_local_dir(
         CURRENT_DIR,
         remote_path=REMOTE_DIR,
@@ -72,7 +72,7 @@ def normalize_script_command(script: str) -> str:
 
 @app.function(gpu=MACHINE_ARCH)
 def run_script(script: str, artifact_globs: list[str], max_artifact_bytes: int, 
-               env_vars: dict[str, str], action: Literal["run", "pytest"]):
+               env_vars: dict[str, str], action: Literal["run", "pytest", "distributed"]):
     f"""
     Run a Python script on {MACHINE_ARCH} GPU.
     """
@@ -101,12 +101,22 @@ def run_script(script: str, artifact_globs: list[str], max_artifact_bytes: int,
         for relative_path, artifact_path in iter_artifact_paths()
     }
 
+    if action == "distributed":
+        machine_arch_parts = MACHINE_ARCH.split(":")
+        if len(machine_arch_parts) > 0:
+            num_gpus = machine_arch_parts[1]
+
     env = os.environ.copy()
     env.update(env_vars)
     if action == "run":
         cmd = ["python", *shlex.split(script)]
-    else:
+    elif action == "distributed":
+        cmd = ["torchrun", "--standalone", "--nnodes=1", f"--nproc-per-node={num_gpus}", *shlex.split(script)]
+    elif action == "pytest":
         cmd = ["python", "-m", "pytest", *shlex.split(script)]
+    else:
+        raise ValueError(f"Action={action} is not recognizable!")
+
     print(f"Running: {shlex.join(cmd)}")
     print(f"-"*60)
 
@@ -143,7 +153,7 @@ def run_script(script: str, artifact_globs: list[str], max_artifact_bytes: int,
     return load
 
 
-@app.function(gpu=MACHINE_ARCH)
+# @app.function(gpu=MACHINE_ARCH) # Uncomment if you actually want to use it
 def debug_script(script: str, env_vars: dict[str, str]):
     f"""
     Run a Python script in-process on {MACHINE_ARCH} GPU for breakpoint debugging.
@@ -242,34 +252,42 @@ def parse_env_vars(env_vars: Optional[str]) -> dict[str, str]:
 
 @app.local_entrypoint()
 def main(
-    action: Literal["run", "pytest", "debug", "test_image"],
+    action: Literal["run", "pytest", "debug", "test_image", "distributed"],
     script: str = None,
     artifact_globs: str = DEFAULT_ARTIFACT_GLOBS,
     artifact_dir: str = ".",
     max_artifact_bytes: int = 100_000_000,
     env_vars: Optional[str] = None,
-    verbose: bool = True,
 ):
+    if not script:
+        print(f"Error: --script required for action ={action}")
+        print(f"Usage: modal run run_modal.py --action {action} --script examples/my_kernel.py")
+        return
+
+    normalized_script = normalize_script_command(script)
+    env_vars = parse_env_vars(env_vars)
+
+    print(f"="*60)
+    print(f"Running {normalized_script} on Modal {MACHINE_ARCH}")
+    print(f"="*60)
+
     if action == "test_image":
         print(f"="*60)
         print(f"Testing The Image on Modal H100")
         print(f"="*60)
 
         test_image.remote()
-    elif action == "run" or action == "pytest":
-        if not script:
-            print(f"Error: --script required for action ={action}")
-            print(f"Usage: modal run run_modal.py --action {action} --script examples/my_kernel.py")
-            return
+    elif action == "run" or action == "pytest" or action == "distributed":
+        machine_arch_parts = MACHINE_ARCH.split(":")
 
-        normalized_script = normalize_script_command(script)
-        
-        print(f"="*60)
-        print(f"Running {normalized_script} on Modal {MACHINE_ARCH}")
-        print(f"="*60)
+        if action == "run" and len(machine_arch_parts) > 0:
+            if int(machine_arch_parts[1]) > 1:
+                print(f"Error: GPU usage more than 1 is detected for action ={action}")
+                print(f"You might want to use action =distributed instead")
+                print(f"Usage: modal run run_modal.py --action distributed --script examples/my_kernel.py")
+                return
 
         artifact_patterns = [pattern.strip() for pattern in artifact_globs.split(",") if pattern.strip()]
-        env_vars = parse_env_vars(env_vars)
         result = run_script.remote(normalized_script, artifact_patterns, max_artifact_bytes, env_vars, action)
 
         print("\n" + "="*60)
@@ -296,15 +314,6 @@ def main(
         elif result["success"]:
             print("No matching artifacts were returned.")
     elif action == "debug":
-        if not script:
-            print("Error: --script required for action =debug")
-            print("Usage: modal run -i run_modal.py --action debug --script examples/my_kernel.py")
-            return
+        print(f"Make sure to use -i! (eg. modal run -i run_modal.py --action debug --script examples/my_kernel.py)")
 
-        normalized_script = normalize_script_command(script)
-        env_vars = parse_env_vars(env_vars)
-
-        print(f"="*60)
-        print(f"Debugging {normalized_script} on Modal {MACHINE_ARCH}")
-        print(f"="*60)
         debug_script.remote(normalized_script, env_vars)

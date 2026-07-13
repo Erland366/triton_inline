@@ -38,3 +38,5 @@ env/
 .claude/settings.local.json
 .codex/settings.local.json
 compiled_resources/
+
+*.png
