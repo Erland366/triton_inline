@@ -136,7 +136,7 @@ def _skinny_matmul_kernel(
         token_b = tlx.async_load(b_ptrs, b_buf, mask=offs_k[:, None] < K_LEN - i * BLOCK_K)
         a_ptrs += BLOCK_K * stride_ak
         b_ptrs += BLOCK_K * stride_bk
-        tlx.async_commit_group([token_a, token_b])
+        tlx.async_load_commit_group([token_a, token_b])
 
     acc = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
     for k in tl.range(0, tl.cdiv(K_LEN, BLOCK_K), num_stages=0):
@@ -191,7 +191,7 @@ def _skinny_matmul(a, b, M, N, K):
         stride_ck = M * N
     else:
         c = torch.empty((M, N), dtype=torch.float16, device=a.device)
-        stride_ck = 9
+        stride_ck = 0
         
     grid = lambda meta: (triton.cdiv(M, meta["BLOCK_M"]) * triton.cdiv(N, meta["BLOCK_N"]), split_k)
     _skinny_matmul_kernel[grid](
@@ -283,8 +283,8 @@ def _skinny_tma_kernel(
     pid_n = (pid % num_pid_in_group) // group_size_m
 
     k_start = pid_k * K_LEN + K_START
-    offsets_am = pid_m * BLOCK_M
-    offsets_bn = pid_n * BLOCK_N
+    offset_am = pid_m * BLOCK_M
+    offset_bn = pid_n * BLOCK_N
 
     buffers_A = tlx.local_alloc((BLOCK_M, BLOCK_K), tlx.dtype_of(a_desc), NUM_STAGES)
     buffers_B = tlx.local_alloc((BLOCK_K, BLOCK_N), tlx.dtype_of(b_desc), NUM_STAGES)
@@ -292,6 +292,34 @@ def _skinny_tma_kernel(
     bars_full_a = tlx.alloc_barriers(num_barriers=NUM_STAGES, arrive_count=1)
     bars_full_b = tlx.alloc_barriers(num_barriers=NUM_STAGES, arrive_count=1)
 
+    num_k_iters = tl.cdiv(K_LEN, BLOCK_K)
+
+    for i in tl.range(0, NUM_STAGES - 1, loop_unroll_factor=NUM_STAGES - 1):
+        buf_a = tlx.local_view(buffers_A, i)
+        buf_b = tlx.local_view(buffers_B, i)
+        bar_a = tlx.local_view(bars_full_a, i)
+        bar_b = tlx.local_view(bars_full_b, i)
+
+        tlx.barrier_expect_bytes(bar_a, BLOCK_M * BLOCK_K, tlx.size_of(tlx.dtype_of(a_desc)))
+        tlx.barrier_expect_bytes(bar_b, BLOCK_K * BLOCK_N, tlx.size_of(tlx.dtype_of(b_desc)))
+
+        offset_k = k_start + i * BLOCK_K
+        tlx.async_descriptor_load(a_desc, buf_a, [offset_am, offset_k], bar_a)
+        tlx.async_descriptor_load(b_desc, buf_b, [offset_k, offset_bn], bar_b)
+
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for k in tl.range(0, num_k_iters, num_stages=0):
+        buf = k % NUM_STAGES
+        phase = (k // NUM_STAGES) & 1
+
+        bar_a = tlx.local_view(bars_full_a, buf)
+        bar_b = tlx.local_view(bars_full_b, buf)
+
+        tlx.barrier_wait(bar=bar_a, phase=phase)
+        tlx.barrier_wait(bar=bar_b, phase=phase)
+
+        a_k = tlx.local_view(buffers_A, buf)
+        b_k = tlx.
 
 def main():
     configs= _get_skinny_autotune_configs()
