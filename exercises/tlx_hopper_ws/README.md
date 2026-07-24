@@ -40,6 +40,8 @@ non-subtiled, normal-mbarrier case.
 | file | purpose |
 |------|---------|
 | `exercise.py` | Worksheet-style state-machine scaffold. Fill the blanks by reading the upstream WS kernel. |
+| `exercise_me.py` | Student-written skinny and TMA GEMM implementation under active development. |
+| `test_exercise_me.py` | Hopper correctness regression for the skinny TMA wrapper and delayed-MMA buffer reuse. |
 | `benchmark.py` | Benchmark scaffold for later comparison against Torch and the pipelined exercise. |
 
 ## Study Order
@@ -118,6 +120,21 @@ source .venv/bin/activate && python exercises/tlx_hopper_ws/benchmark.py
 
 Fill the worksheet first. Only then complete the benchmark.
 
+Run the student TMA correctness regression on the Modal H100 environment:
+
+```bash
+source .venv/bin/activate
+modal run run_modal.py \
+  --action pytest \
+  --script "exercises/tlx_hopper_ws/test_exercise_me.py -q"
+```
+
+The regression uses FP16 `(M, N, K) = (128, 256, 4096)`. On the target
+Hopper configuration, the wrapper selects split-K while leaving enough K
+iterations per program to wrap and reuse the circular TMA buffers multiple
+times. This makes stale or prematurely overwritten buffer contents observable
+against the `torch.matmul` reference.
+
 ## Acceptance Criteria
 
 1. `exercise.py` explains the producer/consumer roles without copying the full
@@ -128,6 +145,8 @@ Fill the worksheet first. Only then complete the benchmark.
 4. All tested GEMM cases use fp16 or bf16 inputs and `K % 64 == 0`.
 5. Any benchmark result is recorded in `benchmark_results/` or summarized in a
    short report.
+6. `test_exercise_me.py` passes on Hopper before benchmarking the student TMA
+   implementation.
 
 ## Boundaries
 

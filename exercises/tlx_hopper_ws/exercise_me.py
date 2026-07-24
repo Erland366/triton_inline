@@ -263,6 +263,7 @@ def _skinny_tma_kernel(
     stride_ck, # Because we use split-K
     stride_cm,
     stride_cn,
+    K_START,
     SPLIT_K: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -300,8 +301,8 @@ def _skinny_tma_kernel(
         bar_a = tlx.local_view(bars_full_a, i)
         bar_b = tlx.local_view(bars_full_b, i)
 
-        tlx.barrier_expect_bytes(bar_a, BLOCK_M * BLOCK_K, tlx.size_of(tlx.dtype_of(a_desc)))
-        tlx.barrier_expect_bytes(bar_b, BLOCK_K * BLOCK_N, tlx.size_of(tlx.dtype_of(b_desc)))
+        tlx.barrier_expect_bytes(bar_a, BLOCK_M * BLOCK_K * tlx.size_of(tlx.dtype_of(a_desc)))
+        tlx.barrier_expect_bytes(bar_b, BLOCK_K * BLOCK_N * tlx.size_of(tlx.dtype_of(b_desc)))
 
         offset_k = k_start + i * BLOCK_K
         tlx.async_descriptor_load(a_desc, buf_a, [offset_am, offset_k], bar_a)
@@ -319,7 +320,83 @@ def _skinny_tma_kernel(
         tlx.barrier_wait(bar=bar_b, phase=phase)
 
         a_k = tlx.local_view(buffers_A, buf)
-        b_k = tlx.
+        b_k = tlx.local_view(buffers_B, buf)
+        acc = tlx.async_dot(a_k, b_k, acc)
+
+        next_i = k + NUM_STAGES - 1
+
+        acc = tlx.async_dot_wait(1, acc)
+        if next_i < num_k_iters:
+            next_buf = next_i % NUM_STAGES
+            buf_a_next = tlx.local_view(buffers_A, next_buf)
+            buf_b_next = tlx.local_view(buffers_B, next_buf)
+            bar_a_next = tlx.local_view(bars_full_a, next_buf)
+            bar_b_next = tlx.local_view(bars_full_b, next_buf)
+
+
+            tlx.barrier_expect_bytes(bar_a_next, BLOCK_M * BLOCK_K * tlx.size_of(tlx.dtype_of(a_desc)))
+            tlx.barrier_expect_bytes(bar_b_next, BLOCK_K * BLOCK_N * tlx.size_of(tlx.dtype_of(b_desc)))
+
+            offset_k = k_start + next_i * BLOCK_K
+            tlx.async_descriptor_load(a_desc, buf_a_next, [offset_am, offset_k], bar_a_next)
+            tlx.async_descriptor_load(b_desc, buf_b_next, [offset_k, offset_bn], bar_b_next)
+
+    acc = tlx.async_dot_wait(0, acc)
+    offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    c = acc.to(tl.float16)
+    if SPLIT_K > 1:
+        c_ptrs = c_ptr + pid_k * stride_ck + offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
+    else:
+        c_ptrs = c_ptr + offs_cm[:, None] * stride_cm + offs_cn[None, :] * stride_cn
+    tl.store(c_ptrs, c, c_mask)
+
+def _skinny_matmul_tma(a, b, M, N, K):
+    triton.set_allocator(alloc_fn)
+    NUM_SMS = torch.cuda.get_device_properties(a.device).multi_processor_count
+
+    tiles = math.ceil(M / 128) * math.ceil(N / 64)
+
+    # I need to study more on this sections ngl
+    split_k = 1
+    k_blocks = K // 64
+    target_sk = max(1, 2 * NUM_SMS // tiles)
+    for sk in [128, 64, 32, 16, 8, 4, 2]:
+        if sk <= target_sk and k_blocks // sk >= 16 and tiles * sk >= 8:
+            split_k = sk
+            break
+
+    k_per_split = K // split_k
+    if split_k > 1:
+        c = torch.empty((split_k, M, N), dtype=torch.float16, device=a.device)
+        stride_ck = M * N
+    else:
+        c = torch.empty((M, N), dtype=torch.float16, device=a.device)
+        stride_ck = 0
+    
+    dummy_block = [1, 1]
+    desc_a = TensorDescriptor(a, shape=[M, K], strides=[K, 1], block_shape=dummy_block)
+    desc_b = TensorDescriptor(b, shape=[K, N], strides=[N, 1], block_shape=dummy_block)
+    grid = lambda meta: (triton.cdiv(M, meta["BLOCK_M"]) * triton.cdiv(N, meta["BLOCK_N"]), split_k)
+    _skinny_tma_kernel[grid](
+        desc_a,
+        desc_b,
+        c,
+        M,
+        N,
+        k_per_split,
+        stride_ck,
+        c.stride(-2),
+        c.stride(-1),
+        K_START=0,
+        SPLIT_K=split_k
+    )
+    if split_k > 1:
+        c = c.sum(dim=0)
+    return c
+
+
 
 def main():
     configs= _get_skinny_autotune_configs()
@@ -327,7 +404,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    
-
-

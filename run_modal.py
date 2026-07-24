@@ -252,7 +252,7 @@ def parse_env_vars(env_vars: Optional[str]) -> dict[str, str]:
 
 @app.local_entrypoint()
 def main(
-    action: Literal["run", "pytest", "debug", "test_image", "distributed"],
+    action: Literal["run", "test", "pytest", "debug", "test_image", "distributed"],
     script: str = None,
     artifact_globs: str = DEFAULT_ARTIFACT_GLOBS,
     artifact_dir: str = ".",
@@ -277,7 +277,9 @@ def main(
         print(f"="*60)
 
         test_image.remote()
-    elif action == "run" or action == "pytest" or action == "distributed":
+    elif action in ["run", "pytest", "distributed", "test"]:
+        if action == "test":
+            action = "pytest"
         machine_arch_parts = MACHINE_ARCH.split(":")
 
         if action == "run" and len(machine_arch_parts) > 0:
