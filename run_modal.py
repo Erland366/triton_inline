@@ -35,13 +35,14 @@ image = (
     .entrypoint([])
     .apt_install("git", "build-essential", "cmake")
     .uv_pip_install("torch==2.11.0", index_url="https://download.pytorch.org/whl/cu128")
+    .uv_pip_install("triton==3.7.1") # For TLX, comment this instead
     .uv_pip_install("pytest", "numpy", "ninja")
-    .apt_install("zlib1g-dev")
-    .run_commands(
-        "git clone --depth 1 https://github.com/facebookexperimental/triton.git /opt/triton",
-        "cd /opt/triton && /.uv/uv pip install --python $(command -v python) --compile-bytecode -r python/requirements.txt",
-        "cd /opt/triton && /.uv/uv pip install --python $(command -v python) --compile-bytecode -e . ",
-    )
+    # .apt_install("zlib1g-dev") # This is for TLX instead and the zlib1g-dev
+    # .run_commands(
+    #     "git clone --depth 1 https://github.com/facebookexperimental/triton.git /opt/triton",
+    #     "cd /opt/triton && /.uv/uv pip install --python $(command -v python) --compile-bytecode -r python/requirements.txt",
+    #     "cd /opt/triton && /.uv/uv pip install --python $(command -v python) --compile-bytecode -e . ",
+    # )
     .uv_pip_install("matplotlib", "pandas", "expecttest")
     .add_local_dir(
         CURRENT_DIR,
@@ -49,7 +50,8 @@ image = (
         ignore=IGNORE_PATTERNS
     )
 )
-app = modal.App("TLX-learning", image=image)
+# app = modal.App("TLX-learning", image=image) # If TLX learning
+app = modal.App("Gluon-learning", image=image)
 
 
 def normalize_script_command(script: str) -> str:
@@ -191,8 +193,8 @@ def test_image():
     import subprocess
     import torch # type: ignore
     import triton  # type: ignore
-    import triton.language as tl # type: ignore
-    import triton.language.extra as tlx # type: ignore
+    from triton.experimental import gluon  # type: ignore
+    from triton.experimental.gluon import language as gl  # type: ignore
 
     print("Python OK")
     print(f"Torch: {torch.__version__}")
@@ -200,7 +202,8 @@ def test_image():
     print(f"CUDA Version: {torch.version.cuda}")
     print(f"GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}")
     print(f"Triton: {triton.__file__}")
-    print(f"TLX: {tlx.__file__}")
+    print(f"Gluon: {gluon.__file__}")
+    print(f"Gluon language: {gl.__file__}")
 
     subprocess.run(["python", "-m", "pip", "show", "triton"], check=False)
     subprocess.run(["nvidia-smi"], check=False)
